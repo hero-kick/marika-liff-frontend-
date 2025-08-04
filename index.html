@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Marika 予約システム</title>
+    <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 20px;
+            background-color: #f4f7f6;
+            color: #333;
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        #debug-output {
+            background-color: #e0e0e0;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 20px;
+            max-height: 150px;
+            overflow-y: auto;
+            font-size: 0.8em;
+            color: #555;
+        }
+        #debug-output p {
+            margin: 2px 0;
+            word-wrap: break-word;
+        }
+        form {
+            background-color: #fff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            max-width: 500px;
+            margin: 0 auto;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+            color: #34495e;
+        }
+        input[type="date"],
+        select {
+            width: calc(100% - 20px);
+            padding: 10px;
+            margin-bottom: 20px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+            font-size: 1em;
+        }
+        button {
+            background-color: #28a745;
+            color: white;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1.1em;
+            width: 100%;
+            transition: background-color 0.3s ease;
+        }
+        button:hover {
+            background-color: #218838;
+        }
+    </style>
+</head>
+<body>
+    <h1>Marika 予約フォーム</h1>
+    <div id="debug-output"></div>
+
+    <form id="booking-form">
+        <label for="date">日付:</label>
+        <input type="date" id="date" name="date" required>
+
+        <label for="menu">メニュー:</label>
+        <select id="menu" name="menu" required>
+            <option value="">メニューを選択してください</option>
+            <!-- メニューはGASから取得して動的に追加 -->
+        </select>
+
+        <label for="staff">スタッフ:</label>
+        <select id="staff" name="staff">
+            <option value="">指名なし</option>
+            <!-- スタッフはGASから取得して動的に追加 -->
+        </select>
+
+        <label for="time">時間:</label>
+        <select id="time" name="time" required>
+            <option value="">日付とメニューを選択してください</option>
+        </select>
+
+        <button type="submit">予約する</button>
+    </form>
+
+    <script>
+        // お客様が手動で更新するURL
+        const GAS_API_ENDPOINT = 'https://script.google.com/macros/s/AKfycbyCzr5JsG3kCjC_DDfwmAH2GnkGSNoo2LCLETWmkwT6hQwg-63vdHyd_eeCUWwF_xw6/exec'; 
+
+        const debugOutput = document.getElementById('debug-output');
+
+        function logDebug(message) {
+            const p = document.createElement('p');
+            p.textContent = `[DEBUG] ${new Date().toLocaleString()}: ${message}`;
+            debugOutput.prepend(p); // 最新のメッセージを上に追加
+            if (debugOutput.children.length > 10) { // 表示数を制限
+                debugOutput.removeChild(debugOutput.lastChild);
+            }
+        }
+
+        async function initializeLiff() {
+            logDebug('LIFF初期化を開始します...');
+            try {
+                // gpt_config.yamlから取得したLIFF ID
+                await liff.init({ liffId: '2007876123-EGA57epP' }); 
+                logDebug('LIFF初期化に成功しました。');
+
+                if (liff.isLoggedIn()) {
+                    const profile = await liff.getProfile();
+                    logDebug(`LIFFログイン済み。ユーザー名: ${profile.displayName}, User ID: ${profile.userId}`);
+                    // ここでユーザーIDをフォームにセットするなど、必要な処理を行う
+                } else {
+                    logDebug('LIFF未ログイン。ログインを促します。');
+                    // liff.login(); // 必要に応じてログインを促す
+                }
+            } catch (err) {
+                logDebug(`LIFF初期化に失敗しました: ${err.message}`);
+                console.error('LIFF init failed', err);
+            }
+        }
+
+        // GASへのAPI呼び出し関数
+        async function callGasApi(action, data = {}) {
+            logDebug(`GAS API呼び出し: ${action} with data: ${JSON.stringify(data)}`);
+            try {
+                const response = await fetch(GAS_API_ENDPOINT, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ action, ...data }),
+                });
+                const result = await response.json();
+                logDebug(`GAS API応答: ${JSON.stringify(result)}`);
+                return result;
+            } catch (error) {
+                logDebug(`GAS API呼び出しエラー: ${error.message}`);
+                console.error('GAS API call failed', error);
+                return { success: false, message: 'API呼び出しに失敗しました。' };
+            }
+        }
+
+        // メニューとスタッフの取得
+        async function loadInitialData() {
+            const menuSelect = document.getElementById('menu');
+            const staffSelect = document.getElementById('staff');
+
+            // メニューの取得
+            const menus = await callGasApi('getMenus'); // Code.gsにgetMenus関数があると仮定
+            if (menus.success && menus.data) {
+                menus.data.forEach(menu => {
+                    const option = document.createElement('option');
+                    option.value = menu.id;
+                    option.textContent = menu.name;
+                    menuSelect.appendChild(option);
+                });
+            } else {
+                logDebug('メニューの取得に失敗しました。');
+            }
+
+            // スタッフの取得
+            const staffs = await callGasApi('getStaffs'); // Code.gsにgetStaffs関数があると仮定
+            if (staffs.success && staffs.data) {
+                staffs.data.forEach(staff => {
+                    const option = document.createElement('option');
+                    option.value = staff.id;
+                    option.textContent = staff.name;
+                    staffSelect.appendChild(option);
+                });
+            } else {
+                logDebug('スタッフの取得に失敗しました。');
+            }
+        }
+
+        // 空き時間の取得と表示
+        async function updateAvailableTimes() {
+            const dateInput = document.getElementById('date');
+            const menuSelect = document.getElementById('menu');
+            const staffSelect = document.getElementById('staff');
+            const timeSelect = document.getElementById('time');
+
+            timeSelect.innerHTML = '<option value="">時間を選択してください</option>'; // クリア
+
+            const selectedDate = dateInput.value;
+            const selectedMenuId = menuSelect.value;
+            const selectedStaffId = staffSelect.value;
+
+            if (!selectedDate || !selectedMenuId) {
+                logDebug('日付とメニューを選択してください。');
+                return;
+            }
+
+            logDebug(`空き時間検索: 日付=${selectedDate}, メニューID=${selectedMenuId}, スタッフID=${selectedStaffId}`);
+            const availableTimes = await callGasApi('getAvailableSlots', {
+                date: selectedDate,
+                menuId: selectedMenuId,
+                staffId: selectedStaffId || null // 指名なしの場合はnull
+            }); // Code.gsにgetAvailableSlots関数があると仮定
+
+            if (availableTimes.success && availableTimes.data && availableTimes.data.length > 0) {
+                availableTimes.data.forEach(slot => {
+                    const option = document.createElement('option');
+                    option.value = slot.time; // 例: "10:00"
+                    option.textContent = `${slot.time} (${slot.status})`; // 例: "10:00 (○)"
+                    timeSelect.appendChild(option);
+                });
+            } else {
+                logDebug('選択された日付、メニュー、スタッフでは空き時間がありません。');
+                const option = document.createElement('option');
+                option.value = '';
+                option.textContent = '空き時間がありません';
+                timeSelect.appendChild(option);
+            }
+        }
+
+        // フォーム送信処理
+        document.getElementById('booking-form').addEventListener('submit', async (event) => {
+            event.preventDefault();
+
+            const date = document.getElementById('date').value;
+            const time = document.getElementById('time').value;
+            const menuId = document.getElementById('menu').value;
+            const staffId = document.getElementById('staff').value;
+            let userId = ''; // LIFFから取得するユーザーID
+
+            if (liff.isLoggedIn()) {
+                const profile = await liff.getProfile();
+                userId = profile.userId;
+            } else {
+                logDebug('LIFF未ログインのため、ユーザーIDを取得できませんでした。');
+                // 必要に応じてログインを促すか、匿名予約を許可する
+            }
+
+            const bookingData = {
+                date,
+                time,
+                menuId,
+                staffId: staffId || null,
+                userId, // LINE User ID
+                // 他に必要な顧客情報があれば追加
+            };
+
+            logDebug(`予約確定処理を開始します: ${JSON.stringify(bookingData)}`);
+            const result = await callGasApi('bookAppointment', bookingData); // Code.gsにbookAppointment関数があると仮定
+
+            if (result.success) {
+                alert('予約が完了しました！');
+                logDebug('予約完了。');
+                // フォームをリセットするか、完了画面に遷移
+            } else {
+                alert(`予約に失敗しました: ${result.message}`);
+                logDebug(`予約失敗: ${result.message}`);
+            }
+        });
+
+        // イベントリスナーの設定
+        document.getElementById('date').addEventListener('change', updateAvailableTimes);
+        document.getElementById('menu').addEventListener('change', updateAvailableTimes);
+        document.getElementById('staff').addEventListener('change', updateAvailableTimes);
+
+        // ページロード時の初期化
+        window.onload = async () => {
+            await initializeLiff();
+            await loadInitialData(); // メニューとスタッフを先にロード
+            // 日付が選択されたら空き時間を更新するが、初期表示では日付が未選択なので、ここでは呼び出さない
+        };
+    </script>
+</body>
+</html>
